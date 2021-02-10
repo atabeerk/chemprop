@@ -81,13 +81,13 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
     :return: A list containing the atom features.
     """
     features = onek_encoding_unk(atom.GetAtomicNum() - 1, ATOM_FEATURES['atomic_num']) + \
-           onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
-           onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES['formal_charge']) + \
-           onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES['chiral_tag']) + \
-           onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
-           onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES['hybridization']) + \
-           [1 if atom.GetIsAromatic() else 0] + \
-           [atom.GetMass() * 0.01]  # scaled to about the same range as other features
+               onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
+               onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES['formal_charge']) + \
+               onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES['chiral_tag']) + \
+               onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
+               onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES['hybridization']) + \
+               [1 if atom.GetIsAromatic() else 0] + \
+               [atom.GetMass() * 0.01]  # scaled to about the same range as other features
     if functional_groups is not None:
         features += functional_groups
     return features
@@ -265,7 +265,7 @@ class BatchMolGraph:
                  and scope of the atoms and bonds (i.e., the indices of the molecules they belong to).
         """
         if atom_messages:
-            f_bonds = self.f_bonds[:, :get_bond_fdim(atom_messages=atom_messages)]
+            f_bonds = self.f_bonds[:, -get_bond_fdim(atom_messages=atom_messages):]
         else:
             f_bonds = self.f_bonds
 
