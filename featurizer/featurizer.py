@@ -41,8 +41,9 @@ def featurize(dataset_folder):
         print(files)
         print(filename)
         print(counter, "starting")
-        if counter < 798:
+        if counter < 798: # Should change to 0 as I deleted the read files
             continue
+        return
         output_path = "multi_task_features_dmpnn_25_zinc_flagments/file_" + str(counter // 4) + ".csv"
         if filename.endswith(".txt") and not os.stat(os.path.join("splitted",filename)).st_size == 0:
             featurize_file(file_path=os.path.join("splitted", filename),
@@ -76,4 +77,4 @@ def counter(f):
 
 
 if __name__ == "__main__":
-    featurize("splitted")
+    print(counter('multi_task_features_dmpnn_25_zinc_flagments'))
