@@ -1,5 +1,12 @@
+import os
 from mysql.connector import connect, Error
+import numpy as np
+import pandas as pd
+import pickle
+import csv
 from clustering import read_csvs
+
+
 
 def connect_db():
     try:
@@ -22,20 +29,39 @@ def execute_query(conn, query):
 
 if __name__ == "__main__":
     conn = connect_db()
-    insert_compounds = "INSERT IGNORE INTO compounds (smiles, featurized)" \
-                       "VALUES (%s, %s)"
+    for i in range(0, 58000000, 1000000):
+        query = f"SELECT * FROM compounds LIMIT {i}, {i+1000000}"
+        with conn.cursor() as cursor:
+            cursor.execute(query)
+            result = cursor.fetchall()
+            print(result[0])
+            fp = open("/VOLUMES/ATABERK64/db_chunk" + str(int(i/1000000)) + ".csv", "w+")
+            f = csv.writer(fp)
+            f.writerows(result)
+            fp.close()
+            print(str(int(i/1000000)), "complete")
 
-    df = read_csvs(folder="multi_task_features_dmpnn_25_zinc_flagments")
+
+
     """
 value_list = []
-i = 1
 for index, row in df.iterrows():
-    value_list.append((row["smiles"], row["descriptors"].dumps()))
-    if len(value_list) == 100000:
+    if index <= 84999989:
+        continue
+    cluster = row["labels"]
+    smiles = row["smiles"]
+    value_list.append([cluster, smiles])
+    if len(value_list) < 100000:
+        continue
+    else:
+        print(index)
+        query = 'UPDATE compounds SET assigned_cluster=%s WHERE smiles=%s'
         with conn.cursor() as cursor:
-            cursor.executemany(insert_compounds, value_list)
-            conn.commit()
+            cursor.executemany(query, value_list)
+        conn.commit()
         value_list = []
-        print(i*100000)
-        i += 1
+    """
+
+    """
+Left at 8599989
     """
