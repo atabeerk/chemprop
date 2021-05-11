@@ -16,9 +16,10 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
+from tqdm import tqdm
 
-from chemprop.args import TrainArgs
-from chemprop.data import StandardScaler, MoleculeDataset, preprocess_smiles_columns
+from chemprop.args import PredictArgs, TrainArgs
+from chemprop.data import StandardScaler, MoleculeDataset, preprocess_smiles_columns, get_task_names
 from chemprop.models import MoleculeModel
 from chemprop.nn_utils import NoamLR
 
@@ -43,6 +44,8 @@ def save_checkpoint(path: str,
                     model: MoleculeModel,
                     scaler: StandardScaler = None,
                     features_scaler: StandardScaler = None,
+                    atom_descriptor_scaler: StandardScaler = None,
+                    bond_feature_scaler: StandardScaler = None,
                     args: TrainArgs = None) -> None:
     """
     Saves a model checkpoint.
@@ -50,6 +53,8 @@ def save_checkpoint(path: str,
     :param model: A :class:`~chemprop.models.model.MoleculeModel`.
     :param scaler: A :class:`~chemprop.data.scaler.StandardScaler` fitted on the data.
     :param features_scaler: A :class:`~chemprop.data.scaler.StandardScaler` fitted on the features.
+    :param atom_descriptor_scaler: A :class:`~chemprop.data.scaler.StandardScaler` fitted on the atom descriptors.
+    :param bond_feature_scaler: A :class:`~chemprop.data.scaler.StandardScaler` fitted on the bond_fetaures.
     :param args: The :class:`~chemprop.args.TrainArgs` object containing the arguments the model was trained with.
     :param path: Path where checkpoint will be saved.
     """
@@ -67,7 +72,15 @@ def save_checkpoint(path: str,
         'features_scaler': {
             'means': features_scaler.means,
             'stds': features_scaler.stds
-        } if features_scaler is not None else None
+        } if features_scaler is not None else None,
+        'atom_descriptor_scaler': {
+            'means': atom_descriptor_scaler.means,
+            'stds': atom_descriptor_scaler.stds
+        } if atom_descriptor_scaler is not None else None,
+        'bond_feature_scaler': {
+            'means': bond_feature_scaler.means,
+            'stds': bond_feature_scaler.stds
+        } if bond_feature_scaler is not None else None
     }
     torch.save(state, path)
 
@@ -132,7 +145,7 @@ def load_checkpoint(path: str,
     return model
 
 
-def load_scalers(path: str) -> Tuple[StandardScaler, StandardScaler]:
+def load_scalers(path: str) -> Tuple[StandardScaler, StandardScaler, StandardScaler, StandardScaler]:
     """
     Loads the scalers a model was trained with.
 
@@ -148,7 +161,21 @@ def load_scalers(path: str) -> Tuple[StandardScaler, StandardScaler]:
                                      state['features_scaler']['stds'],
                                      replace_nan_token=0) if state['features_scaler'] is not None else None
 
-    return scaler, features_scaler
+    if 'atom_descriptor_scaler' in state.keys():
+        atom_descriptor_scaler = StandardScaler(state['atom_descriptor_scaler']['means'],
+                                                state['atom_descriptor_scaler']['stds'],
+                                                replace_nan_token=0) if state['atom_descriptor_scaler'] is not None else None
+    else:
+        atom_descriptor_scaler = None
+
+    if 'bond_feature_scaler' in state.keys():
+        bond_feature_scaler = StandardScaler(state['bond_feature_scaler']['means'],
+                                            state['bond_feature_scaler']['stds'],
+                                            replace_nan_token=0) if state['bond_feature_scaler'] is not None else None
+    else:
+        bond_feature_scaler = None
+
+    return scaler, features_scaler, atom_descriptor_scaler, bond_feature_scaler
 
 
 def load_args(path: str) -> TrainArgs:
@@ -421,15 +448,17 @@ def timeit(logger_name: str = None) -> Callable[[Callable], Callable]:
 
 def save_smiles_splits(data_path: str,
                        save_dir: str,
-                       task_names: list = None,
-                       features_path: list = None,
+                       task_names: List[str] = None,
+                       features_path: List[str] = None,
                        train_data: MoleculeDataset = None,
                        val_data: MoleculeDataset = None,
                        test_data: MoleculeDataset = None,
-                       smiles_columns: str = None) -> None:
+                       logger: logging.Logger = None,
+                       smiles_columns: List[str] = None) -> None:
     """
     Saves a csv file with train/val/test splits of target data and additional features.
-    Also saves indices of train/val/test split as a pickle file. Pickle file does not support repeated entries with same SMILES.
+    Also saves indices of train/val/test split as a pickle file. Pickle file does not support repeated entries 
+    with the same SMILES or entries entered from a path other than the main data path, such as a separate test path.
 
     :param data_path: Path to data CSV file.
     :param save_dir: Path where pickle files will be saved.
@@ -440,27 +469,30 @@ def save_smiles_splits(data_path: str,
     :param val_data: Validation :class:`~chemprop.data.data.MoleculeDataset`.
     :param test_data: Test :class:`~chemprop.data.data.MoleculeDataset`.
     :param smiles_columns: The name of the column containing SMILES. By default, uses the first column.
+    :param logger: A logger for recording output.
     """
     makedirs(save_dir)
+    
+    info = logger.info if logger is not None else print
+    save_split_indices = True
+
+    if not isinstance(smiles_columns, list):
+        smiles_columns = preprocess_smiles_columns(path=data_path, smiles_columns=smiles_columns)
 
     with open(data_path) as f:
-        reader = csv.reader(f)
-        header = next(reader)
-
-        smiles_columns = preprocess_smiles_columns(smiles_columns)
-        if None in smiles_columns:
-            smiles_columns = header[:len(smiles_columns)]
-            smiles_columns_index = list(range(len(smiles_columns)))
-        else:
-            smiles_columns_index = [header.index(i) for i in smiles_columns]
+        reader = csv.DictReader(f)
 
         indices_by_smiles = {}
-        for i, line in enumerate(reader):
-            smiles = tuple(line[j] for j in smiles_columns_index)
+        for i, row in enumerate(tqdm(reader)):
+            smiles = tuple([row[column] for column in smiles_columns])
+            if smiles in indices_by_smiles:
+                save_split_indices = False
+                info('Warning: Repeated SMILES found in data, pickle file of split indices cannot distinguish entries and will not be generated.')
+                break
             indices_by_smiles[smiles] = i
 
     if task_names is None:
-        task_names = [i for i in header if i not in smiles_columns]
+        task_names = get_task_names(path=data_path, smiles_columns=smiles_columns)
 
     features_header = []
     if features_path is not None:
@@ -498,11 +530,99 @@ def save_smiles_splits(data_path: str,
                 writer.writerow(features_header)
                 writer.writerows(dataset_features)
 
-        split_indices = []
-        for smiles in dataset.smiles():
-            split_indices.append(indices_by_smiles.get(tuple(smiles)))
-            split_indices = sorted(split_indices)
-        all_split_indices.append(split_indices)
+        if save_split_indices:
+            split_indices = []
+            for smiles in dataset.smiles():
+                index = indices_by_smiles.get(tuple(smiles))
+                if index is None:
+                    save_split_indices = False
+                    info(f'Warning: SMILES string in {name} could not be found in data file, and likely came from a secondary data file. '
+                    'The pickle file of split indices can only indicate indices for a single file and will not be generated.')
+                    break
+                split_indices.append(index)
+            else:
+                split_indices.sort()
+                all_split_indices.append(split_indices)
 
-    with open(os.path.join(save_dir, 'split_indices.pckl'), 'wb') as f:
-        pickle.dump(all_split_indices, f)
+    if save_split_indices:
+        with open(os.path.join(save_dir, 'split_indices.pckl'), 'wb') as f:
+            pickle.dump(all_split_indices, f)
+
+
+def update_prediction_args(predict_args: PredictArgs,
+                           train_args: TrainArgs,
+                           missing_to_defaults: bool = True,
+                           validate_feature_sources: bool = True) -> None:
+    """
+    Updates prediction arguments with training arguments loaded from a checkpoint file.
+    If an argument is present in both, the prediction argument will be used.
+
+    Also raises errors for situations where the prediction arguments and training arguments
+    are different but must match for proper function.
+
+    :param predict_args: The :class:`~chemprop.args.PredictArgs` object containing the arguments to use for making predictions.
+    :param train_args: The :class:`~chemprop.args.TrainArgs` object containing the arguments used to train the model previously.
+    :param missing_to_defaults: Whether to replace missing training arguments with the current defaults for :class: `~chemprop.args.TrainArgs`.
+        This is used for backwards compatibility.
+    :param validate_feature_sources: Indicates whether the feature sources (from path or generator) are checked for consistency between
+        the training and prediction arguments. This is not necessary for fingerprint generation, where molecule features are not used.
+    """
+    for key, value in vars(train_args).items():
+        if not hasattr(predict_args, key):
+            setattr(predict_args, key, value)
+
+    if missing_to_defaults:
+        # If a default argument would cause different behavior than occurred in legacy checkpoints before the argument existed,
+        # then that argument must be included in the `override_defaults` dictionary to force the legacy behavior.
+        override_defaults = {
+            'bond_features_scaling':False,
+            'no_bond_features_scaling':True,
+            'atom_descriptors_scaling':False,
+            'no_atom_descriptors_scaling':True,
+        }
+        default_train_args=TrainArgs().parse_args(['--data_path', None, '--dataset_type', str(train_args.dataset_type)])
+        for key, value in vars(default_train_args).items():
+            if not hasattr(predict_args,key):
+                setattr(predict_args,key,override_defaults.get(key,value))
+    
+    # Same number of molecules must be used in training as in making predictions
+    if train_args.number_of_molecules != predict_args.number_of_molecules:
+        raise ValueError('A different number of molecules was used in training '
+                        f'model than is specified for prediction, {train_args.number_of_molecules} '
+                         'smiles fields must be provided')
+
+    # If atom-descriptors were used during training, they must be used when predicting and vice-versa
+    if train_args.atom_descriptors != predict_args.atom_descriptors:
+        raise ValueError('The use of atom descriptors is inconsistent between training and prediction. If atom descriptors '
+                         ' were used during training, they must be specified again during prediction using the same type of '
+                         ' descriptors as before. If they were not used during training, they cannot be specified during prediction.')
+
+    # If bond features were used during training, they must be used when predicting and vice-versa
+    if (train_args.bond_features_path is None) != (predict_args.bond_features_path is None):
+        raise ValueError('The use of bond descriptors is different between training and prediction. If you used bond '
+                         'descriptors for training, please specify a path to new bond descriptors for prediction.')
+
+    # if atom or bond features were scaled, the same must be done during prediction
+    if train_args.features_scaling != predict_args.features_scaling:
+        raise ValueError('If scaling of the additional features was done during training, the '
+                         'same must be done during prediction.')
+
+    # If atom descriptors were used during training, they must be used when predicting and vice-versa
+    if train_args.atom_descriptors != predict_args.atom_descriptors:
+        raise ValueError('The use of atom descriptors is inconsistent between training and prediction. '
+                         'If atom descriptors were used during training, they must be specified again '
+                         'during prediction using the same type of descriptors as before. '
+                         'If they were not used during training, they cannot be specified during prediction.')
+
+    # If bond features were used during training, they must be used when predicting and vice-versa
+    if (train_args.bond_features_path is None) != (predict_args.bond_features_path is None):
+        raise ValueError('The use of bond descriptors is different between training and prediction. If you used bond'
+                         'descriptors for training, please specify a path to new bond descriptors for prediction.')
+
+    if validate_feature_sources:
+        # If features were used during training, they must be used when predicting
+        if (((train_args.features_path is None) != (predict_args.features_path is None))
+            or ((train_args.features_generator is None) != (predict_args.features_generator is None))):
+            raise ValueError('Features were used during training so they must be specified again during prediction '
+                            'using the same type of features as before (with either --features_generator or '
+                            '--features_path and using --no_features_scaling if applicable).')

@@ -8,7 +8,8 @@ from typing_extensions import Literal
 import torch
 from tap import Tap  # pip install typed-argument-parser (https://github.com/swansonk14/typed-argument-parser)
 
-from chemprop.data import set_cache_mol
+import chemprop.data.utils
+from chemprop.data import set_cache_mol, empty_cache
 from chemprop.features import get_available_features_generators
 
 
@@ -97,14 +98,21 @@ class CommonArgs(Tap):
     """
     atom_descriptors_path: str = None
     """Path to the extra atom descriptors."""
+    bond_features_path: str = None
+    """Path to the extra bond descriptors that will be used as bond features to featurize a given molecule."""
     no_cache_mol: bool = False
     """
     Whether to not cache the RDKit molecule for each SMILES string to reduce memory usage (cached by default).
+    """
+    empty_cache: bool = False
+    """
+    Whether to empty all caches before training or predicting. This is necessary if multiple jobs are run within a single script and the atom or bond features change.
     """
 
     def __init__(self, *args, **kwargs):
         super(CommonArgs, self).__init__(*args, **kwargs)
         self._atom_features_size = 0
+        self._bond_features_size = 0
         self._atom_descriptors_size = 0
 
     @property
@@ -131,8 +139,15 @@ class CommonArgs(Tap):
 
     @property
     def features_scaling(self) -> bool:
-        """Whether to apply normalization with a :class:`~chemprop.data.scaler.StandardScaler` to the additional molecule-level features."""
+        """
+        Whether to apply normalization with a :class:`~chemprop.data.scaler.StandardScaler`
+        to the additional molecule-level features.
+        """
         return not self.no_features_scaling
+
+    @features_scaling.setter
+    def features_scaling(self, features_scaling: bool) -> None:
+        self.no_features_scaling = not features_scaling
 
     @property
     def atom_features_size(self) -> int:
@@ -152,6 +167,15 @@ class CommonArgs(Tap):
     def atom_descriptors_size(self, atom_descriptors_size: int) -> None:
         self._atom_descriptors_size = atom_descriptors_size
 
+    @property
+    def bond_features_size(self) -> int:
+        """The size of the atom features."""
+        return self._bond_features_size
+
+    @bond_features_size.setter
+    def bond_features_size(self, bond_features_size: int) -> None:
+        self._bond_features_size = bond_features_size
+
     def configure(self) -> None:
         self.add_argument('--gpu', choices=list(range(torch.cuda.device_count())))
         self.add_argument('--features_generator', choices=get_available_features_generators())
@@ -168,11 +192,6 @@ class CommonArgs(Tap):
         if self.features_generator is not None and 'rdkit_2d_normalized' in self.features_generator and self.features_scaling:
             raise ValueError('When using rdkit_2d_normalized features, --no_features_scaling must be specified.')
 
-        if self.smiles_columns is None:
-            self.smiles_columns = [None] * self.number_of_molecules
-        elif len(self.smiles_columns) != self.number_of_molecules:
-            raise ValueError('Length of smiles_columns must match number_of_molecules.')
-
         # Validate atom descriptors
         if (self.atom_descriptors is None) != (self.atom_descriptors_path is None):
             raise ValueError('If atom_descriptors is specified, then an atom_descriptors_path must be provided '
@@ -182,7 +201,15 @@ class CommonArgs(Tap):
             raise NotImplementedError('Atom descriptors are currently only supported with one molecule '
                                       'per input (i.e., number_of_molecules = 1).')
 
+        # Validate bond descriptors
+        if self.bond_features_path is not None and self.number_of_molecules > 1:
+            raise NotImplementedError('Bond descriptors are currently only supported with one molecule '
+                                      'per input (i.e., number_of_molecules = 1).')
+
         set_cache_mol(not self.no_cache_mol)
+
+        if self.empty_cache:
+            empty_cache()
 
 
 class TrainArgs(CommonArgs):
@@ -257,6 +284,11 @@ class TrainArgs(CommonArgs):
     """
     save_preds: bool = False
     """Whether to save test split predictions during training."""
+    resume_experiment: bool = False
+    """
+    Whether to resume the experiment.
+    Loads test results from any folds that have already been completed and skips training those folds.
+    """
 
     # Model arguments
     bias: bool = False
@@ -286,6 +318,14 @@ class TrainArgs(CommonArgs):
     """Path to file with features for separate val set."""
     separate_test_features_path: List[str] = None
     """Path to file with features for separate test set."""
+    separate_val_atom_descriptors_path: str = None
+    """Path to file with extra atom descriptors for separate val set."""
+    separate_test_atom_descriptors_path: str = None
+    """Path to file with extra atom descriptors for separate test set."""
+    separate_val_bond_features_path: str = None
+    """Path to file with extra atom descriptors for separate val set."""
+    separate_test_bond_features_path: str = None
+    """Path to file with extra atom descriptors for separate test set."""
     config_path: str = None
     """
     Path to a :code:`.json` file containing arguments. Any arguments present in the config file
@@ -297,6 +337,21 @@ class TrainArgs(CommonArgs):
     """Aggregation scheme for atomic vectors into molecular vectors"""
     aggregation_norm: int = 100
     """For norm aggregation, number by which to divide summed up atomic features"""
+    reaction: bool = False
+    """
+    Whether to adjust MPNN layer to take reactions as input instead of molecules.
+    """
+    reaction_mode: Literal['reac_prod', 'reac_diff', 'prod_diff'] = 'reac_diff'
+    """
+    Choices for construction of atom and bond features for reactions
+    :code:`reac_prod`: concatenates the reactants feature with the products feature.
+    :code:`reac_diff`: concatenates the reactants feature with the difference in features between reactants and products. 
+    :code:`prod_diff`: concatenates the products feature with the difference in features between reactants and products. 
+    """
+    explicit_h: bool = False
+    """
+    Whether H are explicitly specified in input (and should be kept this way).
+    """
 
     # Training arguments
     epochs: int = 30
@@ -316,6 +371,18 @@ class TrainArgs(CommonArgs):
     """Maximum magnitude of gradient during training."""
     class_balance: bool = False
     """Trains with an equal number of positives and negatives in each batch."""
+
+    overwrite_default_atom_features: bool = False
+    """
+    Overwrites the default atom descriptors with the new ones instead of concatenating them.
+    Can only be used if atom_descriptors are used as a feature.
+    """
+    no_atom_descriptor_scaling: bool = False
+    """Turn off atom feature scaling."""
+    overwrite_default_bond_features: bool = False
+    """Overwrites the default atom descriptors with the new ones instead of concatenating them"""
+    no_bond_features_scaling: bool = False
+    """Turn off atom feature scaling."""
 
     def __init__(self, *args, **kwargs) -> None:
         super(TrainArgs, self).__init__(*args, **kwargs)
@@ -383,10 +450,33 @@ class TrainArgs(CommonArgs):
     def train_data_size(self, train_data_size: int) -> None:
         self._train_data_size = train_data_size
 
+    @property
+    def atom_descriptor_scaling(self) -> bool:
+        """
+        Whether to apply normalization with a :class:`~chemprop.data.scaler.StandardScaler`
+        to the additional atom features."
+        """
+        return not self.no_atom_descriptor_scaling
+
+    @property
+    def bond_feature_scaling(self) -> bool:
+        """
+        Whether to apply normalization with a :class:`~chemprop.data.scaler.StandardScaler`
+        to the additional bond features."
+        """
+        return not self.no_bond_features_scaling
+
     def process_args(self) -> None:
         super(TrainArgs, self).process_args()
 
         global temp_dir  # Prevents the temporary directory from being deleted upon function return
+
+        # Process SMILES columns
+        self.smiles_columns = chemprop.data.utils.preprocess_smiles_columns(
+            path=self.data_path,
+            smiles_columns=self.smiles_columns,
+            number_of_molecules=self.number_of_molecules,
+        )
 
         # Load config file
         if self.config_path is not None:
@@ -460,6 +550,39 @@ class TrainArgs(CommonArgs):
         if self.test:
             self.epochs = 0
 
+        # Validate extra atom or bond features for separate validation or test set
+        if self.separate_val_path is not None and self.atom_descriptors is not None \
+                and self.separate_val_atom_descriptors_path is None:
+            raise ValueError('Atom descriptors are required for the separate validation set.')
+
+        if self.separate_test_path is not None and self.atom_descriptors is not None \
+                and self.separate_test_atom_descriptors_path is None:
+            raise ValueError('Atom descriptors are required for the separate test set.')
+
+        if self.separate_val_path is not None and self.bond_features_path is not None \
+                and self.separate_val_bond_features_path is None:
+            raise ValueError('Bond descriptors are required for the separate validation set.')
+
+        if self.separate_test_path is not None and self.bond_features_path is not None \
+                and self.separate_test_bond_features_path is None:
+            raise ValueError('Bond descriptors are required for the separate test set.')
+
+        # validate extra atom descriptor options
+        if self.overwrite_default_atom_features and self.atom_descriptors != 'feature':
+            raise NotImplementedError('Overwriting of the default atom descriptors can only be used if the'
+                                      'provided atom descriptors are features.')
+
+        if not self.atom_descriptor_scaling and self.atom_descriptors is None:
+            raise ValueError('Atom descriptor scaling is only possible if additional atom features are provided.')
+
+        # validate extra bond feature options
+        if self.overwrite_default_bond_features and self.bond_features_path is None:
+            raise ValueError('If you want to overwrite the default bond descriptors, '
+                             'a bond_descriptor_path must be provided.')
+
+        if not self.bond_feature_scaling and self.bond_features_path is None:
+            raise ValueError('Bond descriptor scaling is only possible if additional bond features are provided.')
+
 
 class PredictArgs(CommonArgs):
     """:class:`PredictArgs` includes :class:`CommonArgs` along with additional arguments used for predicting with a Chemprop model."""
@@ -470,6 +593,8 @@ class PredictArgs(CommonArgs):
     """Path to CSV file where predictions will be saved."""
     drop_extra_columns: bool = False
     """Whether to drop all columns from the test data file besides the SMILES columns and the new prediction columns."""
+    ensemble_variance: bool = False
+    """Whether to calculate the variance of ensembles as a measure of epistemic uncertainty. If True, the variance is saved as an additional column for each target in the preds_path."""
 
     @property
     def ensemble_size(self) -> int:
@@ -478,6 +603,12 @@ class PredictArgs(CommonArgs):
 
     def process_args(self) -> None:
         super(PredictArgs, self).process_args()
+
+        self.smiles_columns = chemprop.data.utils.preprocess_smiles_columns(
+            path=self.test_path,
+            smiles_columns=self.smiles_columns,
+            number_of_molecules=self.number_of_molecules,
+        )
 
         if self.checkpoint_paths is None or len(self.checkpoint_paths) == 0:
             raise ValueError('Found no checkpoints. Must specify --checkpoint_path <path> or '
@@ -506,6 +637,13 @@ class InterpretArgs(CommonArgs):
 
     def process_args(self) -> None:
         super(InterpretArgs, self).process_args()
+
+        self.smiles_columns = chemprop.data.utils.preprocess_smiles_columns(
+            path=self.data_path,
+            smiles_columns=self.smiles_columns,
+            number_of_molecules=self.number_of_molecules,
+        )
+
 
         if self.features_path is not None:
             raise ValueError('Cannot use --features_path <path> for interpretation since features '
@@ -567,10 +705,11 @@ class SklearnPredictArgs(Tap):
 
     def process_args(self) -> None:
 
-        if self.smiles_columns is None:
-            self.smiles_columns = [None] * self.number_of_molecules
-        elif len(self.smiles_columns) != self.number_of_molecules:
-            raise ValueError('Length of smiles_columns must match number_of_molecules.')
+        self.smiles_columns = chemprop.data.utils.preprocess_smiles_columns(
+            path=self.test_path,
+            smiles_columns=self.smiles_columns,
+            number_of_molecules=self.number_of_molecules,
+        )
 
         # Load checkpoint paths
         self.checkpoint_paths = get_checkpoint_paths(

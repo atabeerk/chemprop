@@ -6,6 +6,7 @@ from .data import (
     MoleculeDataLoader,
     MoleculeSampler,
     set_cache_graph,
+    empty_cache,
     set_cache_mol
 )
 from .scaffold import generate_scaffold, log_scaffold_stats, scaffold_split, scaffold_to_smiles
@@ -18,14 +19,15 @@ from .utils import (
     get_header,
     get_smiles,
     get_task_names,
+    preprocess_smiles_columns,
     split_data,
     validate_data,
     validate_dataset_type,
-    preprocess_smiles_columns
 )
 
 __all__ = [
     'cache_graph',
+    'empty_cache',
     'cache_mol',
     'MoleculeDatapoint',
     'MoleculeDataset',
@@ -45,7 +47,8 @@ __all__ = [
     'get_header',
     'get_smiles',
     'get_task_names',
+    'preprocess_smiles_columns',
     'split_data',
     'validate_data',
-    'validate_dataset_type'
+    'validate_dataset_type',
 ]

@@ -7,10 +7,9 @@ from tqdm import tqdm
 
 from .predict import predict
 from chemprop.args import PredictArgs, TrainArgs
-from chemprop.data import get_data, get_data_from_smiles, get_header, MoleculeDataLoader, MoleculeDataset
-from chemprop.utils import load_args, load_checkpoint, load_scalers, makedirs, timeit
-from chemprop.features import set_extra_atom_fdim
-
+from chemprop.data import get_data, get_data_from_smiles, MoleculeDataLoader, MoleculeDataset
+from chemprop.utils import load_args, load_checkpoint, load_scalers, makedirs, timeit, update_prediction_args
+from chemprop.features import set_extra_atom_fdim, set_extra_bond_fdim, set_reaction, set_explicit_h
 
 @timeit()
 def make_predictions(args: PredictArgs, smiles: List[List[str]] = None) -> List[List[Optional[float]]]:
@@ -29,28 +28,18 @@ def make_predictions(args: PredictArgs, smiles: List[List[str]] = None) -> List[
     train_args = load_args(args.checkpoint_paths[0])
     num_tasks, task_names = train_args.num_tasks, train_args.task_names
 
-    # If features were used during training, they must be used when predicting
-    if ((train_args.features_path is not None or train_args.features_generator is not None)
-            and args.features_path is None
-            and args.features_generator is None):
-        raise ValueError('Features were used during training so they must be specified again during prediction '
-                         'using the same type of features as before (with either --features_generator or '
-                         '--features_path and using --no_features_scaling if applicable).')
-
-    # If atom-descriptors were used during training, they must be used when predicting and vice-versa
-    if train_args.atom_descriptors != args.atom_descriptors:
-        raise ValueError('The use of atom descriptors is inconsistent between training and prediction. If atom descriptors '
-                         ' were used during training, they must be specified again during prediction using the same type of '
-                         ' descriptors as before. If they were not used during training, they cannot be specified during prediction.')
-
-    # Update predict args with training arguments to create a merged args object
-    for key, value in vars(train_args).items():
-        if not hasattr(args, key):
-            setattr(args, key, value)
+    update_prediction_args(predict_args=args, train_args=train_args)
     args: Union[PredictArgs, TrainArgs]
 
     if args.atom_descriptors == 'feature':
         set_extra_atom_fdim(train_args.atom_features_size)
+
+    if args.bond_features_path is not None:
+        set_extra_bond_fdim(train_args.bond_features_size)
+
+    #set explicit H option and reaction option
+    set_explicit_h(train_args.explicit_h)
+    set_reaction(train_args.reaction, train_args.reaction_mode)
 
     print('Loading data')
     if smiles is not None:
@@ -60,8 +49,8 @@ def make_predictions(args: PredictArgs, smiles: List[List[str]] = None) -> List[
             features_generator=args.features_generator
         )
     else:
-        full_data = get_data(path=args.test_path, target_columns=[], ignore_columns=[], skip_invalid_smiles=False,
-                             args=args, store_row=not args.drop_extra_columns)
+        full_data = get_data(path=args.test_path, smiles_columns=args.smiles_columns, target_columns=[], ignore_columns=[],
+                             skip_invalid_smiles=False, args=args, store_row=not args.drop_extra_columns)
 
     print('Validating SMILES')
     full_to_valid_indices = {}
@@ -92,16 +81,25 @@ def make_predictions(args: PredictArgs, smiles: List[List[str]] = None) -> List[
         num_workers=args.num_workers
     )
 
+    # Partial results for variance robust calculation.
+    if args.ensemble_variance:
+        all_preds = np.zeros((len(test_data), num_tasks, len(args.checkpoint_paths)))
+
     print(f'Predicting with an ensemble of {len(args.checkpoint_paths)} models')
-    for checkpoint_path in tqdm(args.checkpoint_paths, total=len(args.checkpoint_paths)):
+    for index, checkpoint_path in enumerate(tqdm(args.checkpoint_paths, total=len(args.checkpoint_paths))):
         # Load model and scalers
         model = load_checkpoint(checkpoint_path, device=args.device)
-        scaler, features_scaler = load_scalers(checkpoint_path)
+        scaler, features_scaler, atom_descriptor_scaler, bond_feature_scaler = load_scalers(checkpoint_path)
 
         # Normalize features
-        if args.features_scaling:
+        if args.features_scaling or train_args.atom_descriptor_scaling or train_args.bond_feature_scaling:
             test_data.reset_features_and_targets()
-            test_data.normalize_features(features_scaler)
+            if args.features_scaling:
+                test_data.normalize_features(features_scaler)
+            if train_args.atom_descriptor_scaling and args.atom_descriptors is not None:
+                test_data.normalize_features(atom_descriptor_scaler, scale_atom_descriptors=True)
+            if train_args.bond_feature_scaling and args.bond_features_size > 0:
+                test_data.normalize_features(bond_feature_scaler, scale_bond_features=True)
 
         # Make predictions
         model_preds = predict(
@@ -110,14 +108,22 @@ def make_predictions(args: PredictArgs, smiles: List[List[str]] = None) -> List[
             scaler=scaler
         )
         sum_preds += np.array(model_preds)
+        if args.ensemble_variance:
+            all_preds[:, :, index] = model_preds
 
     # Ensemble predictions
     avg_preds = sum_preds / len(args.checkpoint_paths)
     avg_preds = avg_preds.tolist()
 
+    if args.ensemble_variance:
+        all_epi_uncs = np.var(all_preds, axis=2)
+        all_epi_uncs = all_epi_uncs.tolist()
+
     # Save predictions
     print(f'Saving predictions to {args.preds_path}')
     assert len(test_data) == len(avg_preds)
+    if args.ensemble_variance:
+        assert len(test_data) == len(all_epi_uncs)
     makedirs(args.preds_path, isfile=True)
 
     # Get prediction column names
@@ -130,6 +136,8 @@ def make_predictions(args: PredictArgs, smiles: List[List[str]] = None) -> List[
     for full_index, datapoint in enumerate(full_data):
         valid_index = full_to_valid_indices.get(full_index, None)
         preds = avg_preds[valid_index] if valid_index is not None else ['Invalid SMILES'] * len(task_names)
+        if args.ensemble_variance:
+            epi_uncs = all_epi_uncs[valid_index] if valid_index is not None else ['Invalid SMILES'] * len(task_names)
 
         # If extra columns have been dropped, add back in SMILES columns
         if args.drop_extra_columns:
@@ -137,15 +145,17 @@ def make_predictions(args: PredictArgs, smiles: List[List[str]] = None) -> List[
 
             smiles_columns = args.smiles_columns
 
-            if None in smiles_columns:
-                smiles_columns = get_header(args.test_path)[:len(smiles_columns)]
-
             for column, smiles in zip(smiles_columns, datapoint.smiles):
                 datapoint.row[column] = smiles
 
         # Add predictions columns
-        for pred_name, pred in zip(task_names, preds):
-            datapoint.row[pred_name] = pred
+        if args.ensemble_variance:
+            for pred_name, pred, epi_unc in zip(task_names, preds, epi_uncs):
+                datapoint.row[pred_name] = pred
+                datapoint.row[pred_name+'_epi_unc'] = epi_unc
+        else:
+            for pred_name, pred in zip(task_names, preds):
+                datapoint.row[pred_name] = pred
 
     # Save
     with open(args.preds_path, 'w') as f:
