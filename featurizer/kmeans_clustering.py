@@ -8,7 +8,7 @@ def make_array(text):
     return np.fromstring(text.replace("[", "").replace("]", ""), sep=' ')
 
 
-def read_descriptors(path):
+def read_one_csv(path):
     df = pd.read_csv(path)
     df['descriptors'] = df['descriptors'].apply(make_array)
     return df
@@ -19,13 +19,13 @@ def read_csvs(folder):
     for filename in sorted(os.listdir(folder)):
         if filename.endswith('.csv'):
             full_path = os.path.join(folder, filename)
-            df = df.append(read_descriptors(full_path), ignore_index=True)
+            df = df.append(read_one_csv(full_path), ignore_index=True)
             print(filename, "finished")
     return df
 
 if __name__ == "__main__":
     # Should I read 100 files, minibatch cluster and read another 100...?
-    df = read_csvs(folder="../data")
+    df = read_one_csv(folder="../data")
     # create a dictionary
     smiles_descriptors_dict = dict(zip(df.smiles, df.descriptors))
     print("Total number of molecules:", len(smiles_descriptors_dict))
@@ -51,7 +51,4 @@ if __name__ == "__main__":
         smiles_label_df = pd.DataFrame(list(zip(dict_subset.keys(), kmeans.labels_)), columns=["smiles", "labels"])
         # save this df as csv
         smiles_label_df.to_csv("../data/chembl_labels_" + str(int(i/SUBSET_SIZE)) + ".csv")
-
-        secilmis compoundlarin Murcko scaffoldlarini cikar
-        bu scaffoldlar uzerinden cluster et,
 
