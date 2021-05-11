@@ -14,15 +14,7 @@ def read_descriptors(path):
     return df
 
 
-def read_csvs(folder):
+def read_csv(path):
     df = pd.DataFrame(columns=["id", "smiles", "descriptors", "cluster"])
-    for filename in sorted(os.listdir(folder)):
-        if filename.endswith('.csv'):
-            print(filename)
-            full_path = os.path.join(folder, filename)
-            print(full_path)
-            df = df.append(read_descriptors(full_path), ignore_index=True)
-            print(filename, "finished")
+    df = read_descriptors(path)
     return df
-
-df = read_csvs("/Volumes/ATABERK64")

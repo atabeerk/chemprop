@@ -1,10 +1,14 @@
 import os
-from mysql.connector import connect, Error
-import numpy as np
-import pandas as pd
 import pickle
-import csv
-from clustering import read_csvs
+import time
+
+from mysql.connector import connect, Error
+import pandas as pd
+import numpy as np
+from sklearn.metrics import silhouette_score
+
+from csv_reader import read_csv
+
 
 
 
@@ -14,7 +18,8 @@ def connect_db():
             host="localhost",
             user="root",
             password="12345678",
-            database="zinc15_compound_clustering"
+            database="zinc15_compound_clustering",
+            connection_timeout=600
         )
         return conn
     except Error as e:
@@ -29,39 +34,19 @@ def execute_query(conn, query):
 
 if __name__ == "__main__":
     conn = connect_db()
-    for i in range(0, 58000000, 1000000):
-        query = f"SELECT * FROM compounds LIMIT {i}, {i+1000000}"
-        with conn.cursor() as cursor:
-            cursor.execute(query)
-            result = cursor.fetchall()
-            print(result[0])
-            fp = open("/VOLUMES/ATABERK64/db_chunk" + str(int(i/1000000)) + ".csv", "w+")
-            f = csv.writer(fp)
-            f.writerows(result)
-            fp.close()
-            print(str(int(i/1000000)), "complete")
+    cursor = conn.cursor()
+    cursor.execute("SELECT features, assigned_cluster FROM compounds WHERE assigned_cluster IS NOT NULL")
+    result = cursor.fetchall()
+
+    labels = np.zeros(len(result))
+    features = np.zeros([len(result), 25])
+    for i in range(features.shape[0]):
+        if i % 100000 == 0:
+            print(i)
+        features[i] = pickle.loads(result[i][0])
+        labels[i] = result[i][1]
 
 
 
-    """
-value_list = []
-for index, row in df.iterrows():
-    if index <= 84999989:
-        continue
-    cluster = row["labels"]
-    smiles = row["smiles"]
-    value_list.append([cluster, smiles])
-    if len(value_list) < 100000:
-        continue
-    else:
-        print(index)
-        query = 'UPDATE compounds SET assigned_cluster=%s WHERE smiles=%s'
-        with conn.cursor() as cursor:
-            cursor.executemany(query, value_list)
-        conn.commit()
-        value_list = []
-    """
-
-    """
-Left at 8599989
-    """
+    print("starting silhouette index")
+    ss = silhouette_score(features, labels, sample_size=1000000)

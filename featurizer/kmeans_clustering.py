@@ -25,7 +25,7 @@ def read_csvs(folder):
 
 if __name__ == "__main__":
     # Should I read 100 files, minibatch cluster and read another 100...?
-    df = read_csvs(folder="multi_task_features_dmpnn_25_zinc_flagments")
+    df = read_csvs(folder="../data")
     # create a dictionary
     smiles_descriptors_dict = dict(zip(df.smiles, df.descriptors))
     print("Total number of molecules:", len(smiles_descriptors_dict))
@@ -45,9 +45,13 @@ if __name__ == "__main__":
         start = i
         # run minibatch kmeans
         print("starting minibatch kmeans")
-        kmeans = MiniBatchKMeans(n_clusters=6000, batch_size=800, verbose=2, init=cs).fit(list(dict_subset.values()))
+        kmeans = MiniBatchKMeans(n_clusters=50, batch_size=800, verbose=1, init=cs).fit(list(dict_subset.values()))
         cs = kmeans.cluster_centers_
         # create a new df with row1:smiles, row2:cluster label
         smiles_label_df = pd.DataFrame(list(zip(dict_subset.keys(), kmeans.labels_)), columns=["smiles", "labels"])
         # save this df as csv
-        smiles_label_df.to_csv("flagments_labels_" + str(int(i/SUBSET_SIZE)) + ".csv")
+        smiles_label_df.to_csv("../data/chembl_labels_" + str(int(i/SUBSET_SIZE)) + ".csv")
+
+        secilmis compoundlarin Murcko scaffoldlarini cikar
+        bu scaffoldlar uzerinden cluster et,
+
