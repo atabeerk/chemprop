@@ -13,19 +13,39 @@ from tqdm import tqdm
 from .data import MoleculeDatapoint, MoleculeDataset
 from .scaffold import log_scaffold_stats, scaffold_split
 from chemprop.args import PredictArgs, TrainArgs
-from chemprop.features import load_features, load_valid_atom_features
+from chemprop.features import load_features, load_valid_atom_or_bond_features
 
 
-def preprocess_smiles_columns(smiles_columns: Optional[Union[str, List[Optional[str]]]]) -> List[Optional[str]]:
+def preprocess_smiles_columns(path: str,
+                              smiles_columns: Optional[Union[str, List[Optional[str]]]],
+                              number_of_molecules: int = 1) -> List[Optional[str]]:
     """
-    Preprocesses the :code:`smiles_columns` variable to ensure that it is a list.
+    Preprocesses the :code:`smiles_columns` variable to ensure that it is a list of column
+    headings corresponding to the columns in the data file holding SMILES.
 
+    :param path: Path to a CSV file.
     :param smiles_columns: The names of the columns containing SMILES.
                            By default, uses the first :code:`number_of_molecules` columns.
+    :param number_of_molecules: The number of molecules with associated SMILES for each
+                           data point.
     :return: The preprocessed version of :code:`smiles_columns` which is guaranteed to be a list.
     """
-    smiles_columns = smiles_columns if smiles_columns is not None else [None]
-    smiles_columns = [smiles_columns] if type(smiles_columns) != list else smiles_columns
+
+    if smiles_columns is None:
+        if os.path.isfile(path):
+            columns = get_header(path)
+            smiles_columns = columns[:number_of_molecules]
+        else:
+            smiles_columns = [None]*number_of_molecules
+    else:
+        if not isinstance(smiles_columns,list):
+            smiles_columns=[smiles_columns]
+        if os.path.isfile(path):
+            columns = get_header(path)
+            if len(smiles_columns) != number_of_molecules:
+                raise ValueError('Length of smiles_columns must match number_of_molecules.')
+            if any([smiles not in columns for smiles in smiles_columns]):
+                raise ValueError('Provided smiles_columns do not match the header of data file.')
 
     return smiles_columns
 
@@ -55,10 +75,8 @@ def get_task_names(path: str,
 
     columns = get_header(path)
 
-    smiles_columns = preprocess_smiles_columns(smiles_columns)
-
-    if None in smiles_columns:
-        smiles_columns = columns[:len(smiles_columns)]
+    if not isinstance(smiles_columns, list):
+        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns)
 
     ignore_columns = set(smiles_columns + ([] if ignore_columns is None else ignore_columns))
 
@@ -98,13 +116,12 @@ def get_smiles(path: str,
     if smiles_columns is not None and not header:
         raise ValueError('If smiles_column is provided, the CSV file must have a header.')
 
-    smiles_columns = preprocess_smiles_columns(smiles_columns)
+    if not isinstance(smiles_columns, list):
+        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns)
 
     with open(path) as f:
         if header:
             reader = csv.DictReader(f)
-            if None in smiles_columns:
-                smiles_columns = reader.fieldnames[:len(smiles_columns)]
         else:
             reader = csv.reader(f)
             smiles_columns = 0
@@ -126,7 +143,8 @@ def filter_invalid_smiles(data: MoleculeDataset) -> MoleculeDataset:
     """
     return MoleculeDataset([datapoint for datapoint in tqdm(data)
                             if all(s != '' for s in datapoint.smiles) and all(m is not None for m in datapoint.mol)
-                            and all(m.GetNumHeavyAtoms() > 0 for m in datapoint.mol)])
+                            and all(m.GetNumHeavyAtoms() > 0 for m in datapoint.mol if not isinstance(m, tuple))
+                            and all(m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() > 0 for m in datapoint.mol if isinstance(m, tuple))])
 
 
 def get_data(path: str,
@@ -138,6 +156,7 @@ def get_data(path: str,
              features_path: List[str] = None,
              features_generator: List[str] = None,
              atom_descriptors_path: str = None,
+             bond_features_path: str = None,
              max_data_size: int = None,
              store_row: bool = False,
              logger: Logger = None,
@@ -158,6 +177,7 @@ def get_data(path: str,
     :param features_generator: A list of features generators to use. If provided, it is used
                                in place of :code:`args.features_generator`.
     :param atom_descriptors_path: The path to the file containing the custom atom descriptors.
+    :param bond_features_path: The path to the file containing the custom bond features.
     :param max_data_size: The maximum number of data points to load.
     :param logger: A logger for recording output.
     :param store_row: Whether to store the raw CSV row in each :class:`~chemprop.data.data.MoleculeDatapoint`.
@@ -177,9 +197,12 @@ def get_data(path: str,
         features_generator = features_generator if features_generator is not None else args.features_generator
         atom_descriptors_path = atom_descriptors_path if atom_descriptors_path is not None \
             else args.atom_descriptors_path
+        bond_features_path = bond_features_path if bond_features_path is not None \
+            else args.bond_features_path
         max_data_size = max_data_size if max_data_size is not None else args.max_data_size
 
-    smiles_columns = preprocess_smiles_columns(smiles_columns)
+    if not isinstance(smiles_columns, list):
+        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns)
 
     max_data_size = max_data_size or float('inf')
 
@@ -192,28 +215,22 @@ def get_data(path: str,
     else:
         features_data = None
 
-    skip_smiles = [set() for _ in range(len(smiles_columns))]
-
     # Load data
     with open(path) as f:
         reader = csv.DictReader(f)
-        columns = reader.fieldnames
-
-        # By default, the SMILES column is the first column
-        if None in smiles_columns:
-            smiles_columns = columns[:len(smiles_columns)]
 
         # By default, the targets columns are all the columns except the SMILES column
         if target_columns is None:
-            ignore_columns = set(smiles_columns + ([] if ignore_columns is None else ignore_columns))
-            target_columns = [column for column in columns if column not in ignore_columns]
+            target_columns = get_task_names(
+                path=path,
+                smiles_columns=smiles_columns,
+                target_columns=target_columns,
+                ignore_columns=ignore_columns,
+            )
 
         all_smiles, all_targets, all_rows, all_features = [], [], [], []
-        for i, row in tqdm(enumerate(reader)):
+        for i, row in enumerate(tqdm(reader)):
             smiles = [row[c] for c in smiles_columns]
-
-            if smiles in skip_smiles:
-                continue
 
             targets = [float(row[column]) if row[column] != '' else None for column in target_columns]
 
@@ -237,14 +254,21 @@ def get_data(path: str,
         atom_descriptors = None
         if args is not None and args.atom_descriptors is not None:
             try:
-                descriptors = load_valid_atom_features(atom_descriptors_path, [x[0] for x in all_smiles])
+                descriptors = load_valid_atom_or_bond_features(atom_descriptors_path, [x[0] for x in all_smiles])
             except Exception as e:
-                raise ValueError(f'Failed to load or valid custom atomic descriptors: {e}')
+                raise ValueError(f'Failed to load or validate custom atomic descriptors or features: {e}')
 
             if args.atom_descriptors == 'feature':
                 atom_features = descriptors
             elif args.atom_descriptors == 'descriptor':
                 atom_descriptors = descriptors
+
+        bond_features = None
+        if args is not None and args.bond_features_path is not None:
+            try:
+                bond_features = load_valid_atom_or_bond_features(bond_features_path, [x[0] for x in all_smiles])
+            except Exception as e:
+                raise ValueError(f'Failed to load or validate custom bond features: {e}')
 
         data = MoleculeDataset([
             MoleculeDatapoint(
@@ -255,6 +279,9 @@ def get_data(path: str,
                 features=all_features[i] if features_data is not None else None,
                 atom_features=atom_features[i] if atom_features is not None else None,
                 atom_descriptors=atom_descriptors[i] if atom_descriptors is not None else None,
+                bond_features=bond_features[i] if bond_features is not None else None,
+                overwrite_default_atom_features=args.overwrite_default_atom_features if args is not None else False,
+                overwrite_default_bond_features=args.overwrite_default_bond_features if args is not None else False
             ) for i, (smiles, targets) in tqdm(enumerate(zip(all_smiles, all_targets)),
                                                total=len(all_smiles))
         ])
