@@ -23,9 +23,8 @@ def read_csvs(folder):
             print(filename, "finished")
     return df
 
-if __name__ == "__main__":
-    # Should I read 100 files, minibatch cluster and read another 100...?
-    df = read_one_csv(folder="../data")
+def kmeans_clustering(path, save_dir):
+    df = read_one_csv(path)
     # create a dictionary
     smiles_descriptors_dict = dict(zip(df.smiles, df.descriptors))
     print("Total number of molecules:", len(smiles_descriptors_dict))
@@ -50,5 +49,11 @@ if __name__ == "__main__":
         # create a new df with row1:smiles, row2:cluster label
         smiles_label_df = pd.DataFrame(list(zip(dict_subset.keys(), kmeans.labels_)), columns=["smiles", "labels"])
         # save this df as csv
-        smiles_label_df.to_csv("../data/chembl_labels_" + str(int(i/SUBSET_SIZE)) + ".csv")
+        if save_dir:
+            smiles_label_df.to_csv("../data/labels/" + save_dir + ".csv" + str(int(i/SUBSET_SIZE)) + ".csv")
+
+        return kmeans
+
+if __name__ == "__main__":
+    kmeans_clustering()
 
