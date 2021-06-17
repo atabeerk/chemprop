@@ -9,13 +9,16 @@ from chemprop.data import get_data_from_smiles
 
 
 def featurize_file(input_df, output_path, pretrained_model):
-    smiles_list = input_df[input_df.columns[0]].tolist()
+    smiles_list = input_df[input_df.columns[1]].tolist()
+    chembls_list = input_df[input_df.columns[0]].tolist()
     print(len(smiles_list))
+    print(smiles_list[3], chembls_list[3])
     data = get_data_from_smiles(smiles=[[smiles] for smiles in smiles_list])
-    print("Starting molecule vector computation...")
+    print("Starting molecule vector computation for", output_path)
     descriptors = compute_molecule_vectors(model=pretrained_model, data=data, batch_size=64)
     print("Computation finished, saving result...")
     smiles_descriptors_dict = {'smiles': smiles_list, 'descriptors': descriptors}
+    print(smiles_list[3], descriptors[3])
     output_df = pd.DataFrame(smiles_descriptors_dict)
     output_df.to_csv(output_path, mode='a+', header=not os.path.exists(output_path), encoding="ascii", index=False)
 
@@ -75,7 +78,11 @@ def counter(f):
 
 if __name__ == "__main__":
     model = load_checkpoint("../multi_task_subfamily_dmpnn_25/fold_0/model_0/model.pt")
-    df = pd.read_csv("../chembl27/chembl27-all.tsv", sep="\t", header=None).dropna()
-    for i in range(6):
-        featurize_file(input_df=df[i*220000:(i+1)*220000], output_path="../data/chembl27-all-features_"+str(i)+".csv",
-                   pretrained_model=model)
+    folder = "../data/chembl27-with-decoys/smiles"
+    for file in sorted(os.listdir(folder)):
+        if file.endswith(".csv"):
+            path = os.path.join(folder, file)
+            df = pd.read_csv(path)
+            print(df)
+            save_folder = os.path.join("../data/chembl27-with-decoys/features/", file)
+            featurize_file(input_df=df, output_path=save_folder, pretrained_model=model)

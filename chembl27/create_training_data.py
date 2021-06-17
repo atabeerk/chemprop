@@ -1,5 +1,4 @@
-import statistics
-import csv
+import os, statistics, csv, random
 
 import pandas as pd
 
@@ -205,5 +204,41 @@ def create_multi_task_subfamily_training_data(file="kinase.tsv", length=90000):
         writer.writerows(zip(smiles_set, kinase_labels, oxideroductase_labels, transferase_labels))
 
 
+def create_active_nonactive_dataset_for_single_protein(protein, bioactivity_file="chembl27-clean-bioactivites.tsv",
+                                                       act_th=10, non_act_th=20):
+
+    activity_values = pd.read_csv(bioactivity_file,
+                        usecols=['Molecule ChEMBL ID', 'Target ChEMBL ID', 'Smiles', 'Standard Value'],
+                        sep="\t")
+
+    # abl: CHEMBL1862
+    actives = {}
+    inactives = {}
+    for index, row in activity_values.iterrows():
+        if (index % 100000) == 0:
+            print(index)
+        if row["Target ChEMBL ID"] == protein and not (str(row["Smiles"]) == "nan"):
+            if row["Standard Value"] < act_th*1000:
+                actives[row["Molecule ChEMBL ID"]] = row["Smiles"]
+            elif row["Standard Value"] > non_act_th*1000:
+                inactives[row["Molecule ChEMBL ID"]] = row["Smiles"]
+        elif random.uniform(0, 1) < 0.1 and not (str(row["Smiles"]) == "nan"):
+            inactives[row["Molecule ChEMBL ID"]] = row["Smiles"]
+
+
+    # sample 60 times the size of actives
+    sampled_inactives = dict(random.sample(inactives.items(), min(len(actives) * 60, len(inactives))))
+
+    with open(os.path.join("../data/chembl27-with-decoys/smiles", protein + '_actives_decoys.csv'), 'w') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["ChEMBL", "Smiles", "Label"])
+        for key, value in actives.items():
+            writer.writerow([key, value, "1"])
+        for key, value in sampled_inactives.items():
+            writer.writerow([key, value, "0"])
+
+    return actives, dict(sampled_inactives)
+
+
 if __name__ == "__main__":
-    create_multi_task_subfamily_training_data()
+    actives, sampled_inactives = create_active_nonactive_dataset_for_single_protein(protein="CHEMBL1862")
