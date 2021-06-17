@@ -229,6 +229,13 @@ def create_active_nonactive_dataset_for_single_protein(protein, bioactivity_file
     # sample 60 times the size of actives
     sampled_inactives = dict(random.sample(inactives.items(), min(len(actives) * 60, len(inactives))))
 
+    # remove duplicates
+    tmp = list(actives.keys())
+    for smiles in tmp:
+        if smiles in sampled_inactives.keys():
+            actives.pop(smiles)
+            sampled_inactives.pop(smiles)
+
     with open(os.path.join("../data/chembl27-with-decoys/smiles", protein + '_actives_decoys.csv'), 'w') as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(["ChEMBL", "Smiles", "Label"])
