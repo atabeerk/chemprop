@@ -1,8 +1,9 @@
+from collections import Counter
 import pandas as pd
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from kmeans_clustering import read_csvs
 from sklearn.cluster import MiniBatchKMeans, AffinityPropagation
-from sklearn.metrics import rand_score
+from sklearn.metrics import adjusted_rand_score
 
 def murcko_clustering(folder):
     df = read_csvs(folder="../data")
@@ -42,8 +43,8 @@ if __name__ == "__main__":
 
     # cluster these compounds with kmeans clustering
     print("starting clustering")
-    #kmeans = MiniBatchKMeans(n_clusters=21, verbose=1).fit(list(chemprop_desc.values()))
-    ap = AffinityPropagation(verbose=True).fit(list(chemprop_desc.values()))
+    kmeans = MiniBatchKMeans(n_clusters=21, verbose=1).fit(list(chemprop_desc.values()))
+    #ap = AffinityPropagation(verbose=True).fit(list(chemprop_desc.values()))
     # evaluate the clustering by external indices
     print("starting rand index computations")
-    rand = rand_score(list(murcko.label), kmeans.labels_)
+    rand = adjusted_rand_score(list(murcko.label), kmeans.labels_)

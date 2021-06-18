@@ -12,13 +12,11 @@ def featurize_file(input_df, output_path, pretrained_model):
     smiles_list = input_df[input_df.columns[1]].tolist()
     chembls_list = input_df[input_df.columns[0]].tolist()
     print(len(smiles_list))
-    print(smiles_list[3], chembls_list[3])
     data = get_data_from_smiles(smiles=[[smiles] for smiles in smiles_list])
     print("Starting molecule vector computation for", output_path)
     descriptors = compute_molecule_vectors(model=pretrained_model, data=data, batch_size=64)
     print("Computation finished, saving result...")
     smiles_descriptors_dict = {'smiles': smiles_list, 'descriptors': descriptors}
-    print(smiles_list[3], descriptors[3])
     output_df = pd.DataFrame(smiles_descriptors_dict)
     output_df.to_csv(output_path, mode='a+', header=not os.path.exists(output_path), encoding="ascii", index=False)
 
