@@ -1,7 +1,10 @@
 import random, collections
 
 import pandas as pd
+import numpy as np
 from sklearn.cluster import MiniBatchKMeans
+from rdkit import Chem
+from rdkit.Chem import AllChem
 
 from kmeans_clustering import read_one_csv
 
@@ -47,15 +50,37 @@ def calculate_QPI(true_labels, clusters_2d):
     qpi = correct_preds / len(true_labels)
     return qpi, cluster_labels
 
+
+def get_ecfp4_vectors(smiles_list):
+    ecfp4_list = []
+    for smiles in smiles_list:
+        m = Chem.MolFromSmiles(smiles)
+        fp = AllChem.GetMorganFingerprintAsBitVect(m, 2, nBits=1024).ToBitString()
+        ecfp4_list.append(np.frombuffer(fp.encode(), dtype='u1') - ord('0'))
+
+    return ecfp4_list
+
+
 if __name__ == "__main__":
     true_labels = get_true_labels("../data/chembl27-with-decoys/smiles/CHEMBL1862_actives_decoys.csv")
     df = read_one_csv("../data/chembl27-with-decoys/features/CHEMBL1862_actives_decoys.csv")
+
+    # Using Chemprop descriptors
     descriptors = dict(zip(df["smiles"], df["descriptors"]))
-    print(list(descriptors.keys())[3])
     descriptors = shuffle_dict(descriptors)
     smiles = list(descriptors.keys()) # smiles corresponding to X
     X = list(descriptors.values())
-    kmeans_labels = MiniBatchKMeans(n_clusters=2, batch_size=800, init="k-means++").fit(X).labels_
+    kmeans_labels = MiniBatchKMeans(n_clusters=200, batch_size=800, init="k-means++").fit(X).labels_
+    clusters_2d = get_clusters_2d(smiles, kmeans_labels)
+    qpi, _ = calculate_QPI(true_labels, clusters_2d)
+    print(qpi)
+    print(collections.Counter(true_labels.values()))
+
+    # Using ECFP4 vectors
+    ecfp4_list = get_ecfp4_vectors(smiles)
+    ecfp4_dict = dict(zip(smiles, ecfp4_list))
+    X = list(ecfp4_dict.values())
+    kmeans_labels = MiniBatchKMeans(n_clusters=200, batch_size=800, init="k-means++").fit(X).labels_
     clusters_2d = get_clusters_2d(smiles, kmeans_labels)
     qpi, _ = calculate_QPI(true_labels, clusters_2d)
     print(qpi)
