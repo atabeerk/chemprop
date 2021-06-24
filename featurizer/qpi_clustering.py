@@ -3,6 +3,7 @@ import random, collections
 import pandas as pd
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.metrics import silhouette_score
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
@@ -62,28 +63,41 @@ def get_ecfp4_vectors(smiles_list):
 
 
 if __name__ == "__main__":
-    true_labels = get_true_labels("../data/chembl27-with-decoys/smiles/CHEMBL1862_actives_decoys.csv")
-    df = read_one_csv("../data/chembl27-with-decoys/features/CHEMBL1862_actives_decoys.csv")
+    true_labels = get_true_labels("../data/chembl27-with-decoys/smiles/CHEMBL1947_actives_decoys.csv")
+    df = read_one_csv("../data/chembl27-with-decoys/features/CHEMBL1947_actives_decoys.csv")
 
     # Using Chemprop descriptors
+    chemprop_qpis, chemprop_ss = [], []
     descriptors = dict(zip(df["smiles"], df["descriptors"]))
     descriptors = shuffle_dict(descriptors)
     smiles = list(descriptors.keys()) # smiles corresponding to X
     X = list(descriptors.values())
-    kmeans_labels = MiniBatchKMeans(n_clusters=200, batch_size=800, init="k-means++").fit(X).labels_
-    clusters_2d = get_clusters_2d(smiles, kmeans_labels)
-    qpi, _ = calculate_QPI(true_labels, clusters_2d)
-    print(qpi)
-    print(collections.Counter(true_labels.values()))
+    for k in range(10, 1010, 10):
+        kmeans_labels = MiniBatchKMeans(n_clusters=k, batch_size=800, init="k-means++").fit(X).labels_
+        clusters_2d = get_clusters_2d(smiles, kmeans_labels)
+        qpi, _ = calculate_QPI(true_labels, clusters_2d)
+        print(qpi)
+        chemprop_qpis.append(qpi)
+        # silhouette, rand
+        chemprop_ss.append(silhouette_score(X, kmeans_labels, sample_size=20000))
 
     # Using ECFP4 vectors
+    ecfp4_qpis, ecfp4_ss = [], []
     ecfp4_list = get_ecfp4_vectors(smiles)
     ecfp4_dict = dict(zip(smiles, ecfp4_list))
+    ecfp4_dict = shuffle_dict(ecfp4_dict)
     X = list(ecfp4_dict.values())
-    kmeans_labels = MiniBatchKMeans(n_clusters=200, batch_size=800, init="k-means++").fit(X).labels_
-    clusters_2d = get_clusters_2d(smiles, kmeans_labels)
-    qpi, _ = calculate_QPI(true_labels, clusters_2d)
-    print(qpi)
-    print(collections.Counter(true_labels.values()))
+    for k in range(10, 1010, 10):
+        kmeans_labels = MiniBatchKMeans(n_clusters=k, batch_size=800, init="k-means++").fit(X).labels_
+        clusters_2d = get_clusters_2d(smiles, kmeans_labels)
+        qpi, _ = calculate_QPI(true_labels, clusters_2d)
+        print(qpi)
+        ecfp4_qpis.append(qpi)
+        # silhouette, rand
+        ecfp4_ss.append(silhouette_score(X, kmeans_labels, sample_size=20000))
+    print("chemprop silhouette scores:", chemprop_ss)
+    print("chemprop qpi scores:", chemprop_qpis)
+    print("ecfp4 silhouette scores:", ecfp4_ss)
+    print("ecfp4 qpi scores:", ecfp4_qpis)
 
 
