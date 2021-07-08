@@ -9,8 +9,7 @@ from chemprop.data import get_data_from_smiles
 
 
 def featurize_file(input_df, output_path, pretrained_model):
-    smiles_list = input_df[input_df.columns[1]].tolist()
-    chembls_list = input_df[input_df.columns[0]].tolist()
+    smiles_list = input_df[input_df.columns[0]].tolist()
     print(len(smiles_list))
     data = get_data_from_smiles(smiles=[[smiles] for smiles in smiles_list])
     print("Starting molecule vector computation for", output_path)
@@ -76,11 +75,11 @@ def counter(f):
 
 if __name__ == "__main__":
     model = load_checkpoint("../multi_task_subfamily_dmpnn_25/fold_0/model_0/model.pt")
-    folder = "../data/chembl27-with-decoys/smiles"
+    folder = "../data/DUD-E/thb"
     for file in sorted(os.listdir(folder)):
-        if file.endswith(".csv"):
+        if file.startswith("decoys_final.ism"):
             path = os.path.join(folder, file)
             df = pd.read_csv(path)
             print(df)
-            save_folder = os.path.join("../data/chembl27-with-decoys/features/", file)
-            featurize_file(input_df=df, output_path=save_folder, pretrained_model=model)
+            save_as = os.path.join("../data/DUD-E/chemprop_features", "thb_decoys.csv")
+            featurize_file(input_df=df, output_path=save_as, pretrained_model=model)

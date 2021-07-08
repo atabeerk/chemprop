@@ -152,10 +152,11 @@ def create_regression_dataset(bioactivity_file="chembl27-bioactivities-less.tsv"
     for compound, bioactivities in target_bioactivity_mapping.items():
             target_bioactivity_mapping[compound] = statistics.median_low(bioactivities)
 
-    with open('tk_bioactivity_regression_dataset.csv', 'w') as csv_file:
-        writer = csv.writer(csv_file)
-        for key, value in target_bioactivity_mapping.items():
-            writer.writerow([key, value])
+    # with open('tk_bioactivity_regression_dataset.csv', 'w') as csv_file:
+    #     writer = csv.writer(csv_file)
+    #     for key, value in target_bioactivity_mapping.items():
+    #         writer.writerow([key, value])
+    return target_bioactivity_mapping
 
 
 def create_multi_task_subfamily_training_data(file="kinase.tsv", length=90000):
@@ -204,8 +205,8 @@ def create_multi_task_subfamily_training_data(file="kinase.tsv", length=90000):
         writer.writerows(zip(smiles_set, kinase_labels, oxideroductase_labels, transferase_labels))
 
 
-def create_active_nonactive_dataset_for_single_protein(protein, bioactivity_file="chembl27-clean-bioactivites.tsv",
-                                                       act_th=10, non_act_th=20):
+def create_active_inactive_dataset_for_single_protein(protein, bioactivity_file="chembl27-clean-bioactivites.tsv",
+                                                       act_th=10, non_act_th=20, act_limit=-1):
 
     activity_values = pd.read_csv(bioactivity_file,
                         usecols=['Molecule ChEMBL ID', 'Target ChEMBL ID', 'Smiles', 'Standard Value'],
@@ -214,38 +215,51 @@ def create_active_nonactive_dataset_for_single_protein(protein, bioactivity_file
     # abl: CHEMBL1862
     actives = {}
     inactives = {}
+    unknowns = {} # to supplement inactives when necessary
     for index, row in activity_values.iterrows():
         if (index % 100000) == 0:
             print(index)
+        if len(actives) == act_limit:
+            break
         if row["Target ChEMBL ID"] == protein and not (str(row["Smiles"]) == "nan"):
             if row["Standard Value"] < act_th*1000:
                 actives[row["Molecule ChEMBL ID"]] = row["Smiles"]
             elif row["Standard Value"] > non_act_th*1000:
                 inactives[row["Molecule ChEMBL ID"]] = row["Smiles"]
-        elif random.uniform(0, 1) < 0.1 and not (str(row["Smiles"]) == "nan"):
-            inactives[row["Molecule ChEMBL ID"]] = row["Smiles"]
 
+    print("act, inact:", len(actives), len(inactives))
+
+    # supplement inactives
+    if len(inactives) < 60 * len(actives):
+        for index, row in activity_values.iterrows():
+            if (index % 100000) == 0:
+                print(index)
+            if not (row["Target ChEMBL ID"] == protein) and not (str(row["Smiles"]) == "nan"):
+                if random.uniform(0, 1) < 0.2:
+                    unknowns[row["Molecule ChEMBL ID"]] = row["Smiles"]
 
     # sample 60 times the size of actives
-    sampled_inactives = dict(random.sample(inactives.items(), min(len(actives) * 60, len(inactives))))
+    selected_unknowns = dict(random.sample(unknowns.items(), (len(actives) * 60) - len(inactives)))
+    for key, value in selected_unknowns.items():
+        inactives[key] = value
 
     # remove duplicates
     tmp = list(actives.keys())
     for smiles in tmp:
-        if smiles in sampled_inactives.keys():
+        if smiles in inactives.keys():
             actives.pop(smiles)
-            sampled_inactives.pop(smiles)
+            inactives.pop(smiles)
 
-    with open(os.path.join("../data/chembl27-with-decoys/smiles", protein + '_actives_decoys.csv'), 'w') as csv_file:
+    with open(os.path.join("../data/chembl27-with-decoys/smiles", protein + '_actives_decoys_20k.csv'), 'w') as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(["ChEMBL", "Smiles", "Label"])
         for key, value in actives.items():
             writer.writerow([key, value, "1"])
-        for key, value in sampled_inactives.items():
+        for key, value in inactives.items():
             writer.writerow([key, value, "0"])
 
-    return actives, dict(sampled_inactives)
+    return actives, inactives
 
 
 if __name__ == "__main__":
-    actives, sampled_inactives = create_active_nonactive_dataset_for_single_protein(protein="CHEMBL1862")
+    reg = create_regression_dataset()
